@@ -8,9 +8,9 @@ ms.localizationpriority: medium
 
 # Handling Multi-SPI (IOCTL\_SPB\_MULTI\_SPI\_TRANSFER) Transfer Requests
 
-SPBCx contains support for both dual and quad SPI transfers. These transfers are issued to an SPB controller using the [**IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**](about:blank) I/O control code (IOCTL) included, as an option, the definition of the simple peripheral bus (SPB) I/O request interface. Only SPB controller drivers for SPI controllers that support additional half-duplex SPI modes (or multi-SPI modes) should support the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** IOCTL.
+SPBCx contains support for multi-SPI, including both dual and quad SPI transfers. These transfers are issued to an SPB controller using the [**IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**](about:blank) I/O control code (IOCTL) included with the simple peripheral bus (SPB) I/O request interface. Only SPB controller drivers for SPI controllers that support additional multi-SPI modes should support the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** IOCTL.
 
-If an SPB controller driver supports I/O requests for multi-SPI transfers, the driver should use the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** IOCTL for these requests, and should follow the implementation guidelines that are presented in this topic. The purpose of these guidelines is to encourage uniform behavior across all hardware platforms that support **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** requests. Drivers for SPB-connected peripheral devices can then rely on these requests to produce similar results regardless of what platform that they run on.
+If an SPB controller driver supports I/O requests for multi-SPI transfers, the driver should only use the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** IOCTL for these requests, and should follow the implementation guidelines presented in this topic. The purpose of these guidelines is to encourage uniform behavior across all hardware platforms that support **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** requests. Drivers for SPB-connected peripheral devices can then rely on these requests to produce similar results regardless of what hardware platform they are run on.
 
 ## Buffer Requirements
 
@@ -19,18 +19,19 @@ An [**IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**](about:blank) request contains a custom
 -   One or two transfer phases - a _write_ phase, followed by an optional _read_ phase.
 -   A variable number of bytes to be transmitted at the beginning of the _write_ phase in single-SPI mode, before switching to the specified multi-SPI mode.
 -   Where a _read_ phase is provided, a variable number of _wait cycles_ between _write_ and _read_ phases - clock cycles where no data is to be transferred.
+
+The following restrictions apply to this structure:
 -   The [**SPB\_TRANSFER\_LIST**](https://docs.microsoft.com/windows-hardware/drivers/ddi/spb/ns-spb-spb_transfer_list) _TransferPhases_ structure in the request must contain exactly one or two entries. The first entry describes a buffer that contains data to write to the device. The second, optional, entry describes a buffer used to hold data read from the device.
 -   Each [**SPB\_TRANSFER\_LIST\_ENTRY**](https://docs.microsoft.com/windows-hardware/drivers/ddi/spb/ns-spb-spb_transfer_list_entry) structure in the transfer list must specify a **DelayInUs** value of zero.
 
 
 ## Transfer Flow
 During a multi-SPI transfer, the controller is expected to execute the following operations:
-1.  If _WritePhaseSingleSpiByteCount_ is non-zero, initialize in single-SPI mode, otherwise goto (3)
-2.  Transmit _WritePhaseSingleSpiByteCount_ bytes of the _write_ phase buffer, provided in the first entry of the _TransferPhases_ transfer list.
-3.  Switch to the specified multi-SPI mode
-4.  Determine the number of remaining bytes to transmit, by subtracting both the _WaitCycleByteCount_, and _WritePhaseSingleSpiByteCount_ from the total size of the _write_ phase buffer.
-5.  Transmit remaining bytes
-6.  If no read phase is provided, transfer is completed.
+1.  If _WritePhaseSingleSpiByteCount_ is zero, goto (3)
+2.  Transmit in single-SPI mode _WritePhaseSingleSpiByteCount_ bytes of the _write_ phase buffer, provided in the first entry of the _TransferPhases_ transfer list.
+3.  Determine the number of remaining bytes to transmit, by subtracting both the _WaitCycleByteCount_, and _WritePhaseSingleSpiByteCount_ from the total size of the _write_ phase buffer.
+5.  Transmit remaining bytes in specified multi-SPI (dual or quad) mode.
+6.  If no read phase is provided in the _TransferPhases_ list, transfer is completed.
 7.  Execute the wait cycles, through either internal controller configuration or by transmitting remaining _WaitCycleByteCount_ from the end of the _write_ phase buffer.
 8.  Switch modes and begin receiving bytes from the bus, into the _read_ phase buffer, provided in the second entry of the _TransferPhases_ transfer list.
 
@@ -38,9 +39,9 @@ During a multi-SPI transfer, the controller is expected to execute the following
 ## Request Handling
 Although the [**IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**](about:blank) uses a transfer list for the transfer stages, the request uses a custom parameter structure [**SPB_MULTI_SPI_TRANSFER**](about:blank), and parameters will not be automatically validated or buffers captured by SpbCx.
 
-As with **IOCTL\_SPB\_FULL\_DUPLEX**, SpbCx treats the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** request as a custom, driver-defined IOCTL request. SpbCx passes **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** requests to the SPB controller driver through the driver's [*EvtSpbControllerIoOther*](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nc-spbcx-evt_spb_controller_other) callback function, which also handles any custom IOCTL requests that the driver supports. SpbCx does no parameter checking or buffer capture for these requests. The driver is responsible for any parameter checking or buffer capture that might be required for the IOCTL requests that the driver receives through its *EvtSpbControllerIoOther* function.
+As with **IOCTL\_SPB\_FULL\_DUPLEX**, SpbCx treats the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** request as a custom, driver-defined IOCTL request. SpbCx passes **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** requests to the SPB controller driver through the driver's [*EvtSpbControllerIoOther*](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nc-spbcx-evt_spb_controller_other) callback function, which also handles any custom IOCTL requests that the driver supports. SpbCx does no initial parameter checking or buffer capture for these requests. The driver is responsible for calling into SpbCx or performing any parameter checking or buffer capture that might be required for the IOCTL requests that the driver receives through its *EvtSpbControllerIoOther* function.
 
-To enable buffer capture, the driver must supply an [*EvtIoInCallerContext*](https://docs.microsoft.com/windows-hardware/drivers/ddi/wdfdevice/nc-wdfdevice-evt_wdf_io_in_caller_context) callback function when the driver registers its *EvtSpbControllerIoOther* function. The SPB controller driver must call the [**SpbRequestCaptureMultiSpiTransfer**](about:blank) method to capture these buffers in the process context of the request originator. The driver may then call the [**SpbRequestGetTransferParameters**](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nf-spbcx-spbrequestgettransferparameters) method to access these buffers, as it would with an **IOCTL\_SPB\_FULL\_DUPLEX** request.
+To enable buffer capture, the driver must supply an [*EvtIoInCallerContext*](https://docs.microsoft.com/windows-hardware/drivers/ddi/wdfdevice/nc-wdfdevice-evt_wdf_io_in_caller_context) callback function when the driver registers its *EvtSpbControllerIoOther* function. The SPB controller driver must call the [**SpbRequestCaptureMultiSpiTransfer**](about:blank) method to validate the request and capture these buffers in the process context of the request originator. The driver may then call the [**SpbRequestGetTransferParameters**](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nf-spbcx-spbrequestgettransferparameters) method to access these buffers, as it would with an **IOCTL\_SPB\_FULL\_DUPLEX** request.
 
 The following code example shows an *EvtIoInCallerContext* function that is implemented by an SPI controller driver supporting both regular single-SPI (through **IOCTL\_SPB\_FULL\_DUPLEX**), and multi-SPI (through **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**) requests, in order to capture the transfer lists for these SPI requests.
 
@@ -120,7 +121,7 @@ In the preceding code example, the **switch** statement verifies that the reques
 
 Typically, the SPB controller driver validates, and retrieves additional transfer parameter values of an **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** request in the *EvtSpbControllerIoOther* function instead of in the *EvtIoInCallerContext* function. The provided **SpbRequestCaptureMultiSpiTransfer** method validates the following:
 -   The **SPB_MULTI_SPI_TRANSFER** input parameter structure is valid and the correct size.
--   There are 0 or 1 transfer phases provided.
+-   There are 1 or 2 transfer phases provided.
 -   The transfer mode is valid (dual or quad-SPI).
 -   The wait cycle count is zero for single-phase transfers.
 
