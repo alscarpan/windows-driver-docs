@@ -1,6 +1,6 @@
 ---
 title: Handling Multi-SPI (IOCTL_SPB_MULTI_SPI_TRANSFER) Transfer Requests
-description: Some buses, such as SPI, enable read and write transfers to simultaneously occur between the bus controller and a device on the bus.
+description: SPBCx contains support for multi-SPI, including both dual and quad SPI transfers.
 ms.assetid: B200461F-9F9C-43A7-BA78-0864FD58C64E
 ms.date: 04/20/2017
 ms.localizationpriority: medium
@@ -41,7 +41,7 @@ Although the [**IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**](about:blank) uses a transfer
 
 As with **IOCTL\_SPB\_FULL\_DUPLEX**, SpbCx treats the **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** request as a custom, driver-defined IOCTL request. SpbCx passes **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** requests to the SPB controller driver through the driver's [*EvtSpbControllerIoOther*](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nc-spbcx-evt_spb_controller_other) callback function, which also handles any custom IOCTL requests that the driver supports. SpbCx does no initial parameter checking or buffer capture for these requests. The driver is responsible for calling into SpbCx or performing any parameter checking or buffer capture that might be required for the IOCTL requests that the driver receives through its *EvtSpbControllerIoOther* function.
 
-To enable buffer capture, the driver must supply an [*EvtIoInCallerContext*](https://docs.microsoft.com/windows-hardware/drivers/ddi/wdfdevice/nc-wdfdevice-evt_wdf_io_in_caller_context) callback function when the driver registers its *EvtSpbControllerIoOther* function. The SPB controller driver must call the [**SpbRequestCaptureMultiSpiTransfer**](about:blank) method to validate the request and capture these buffers in the process context of the request originator. The driver may then call the [**SpbRequestGetTransferParameters**](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nf-spbcx-spbrequestgettransferparameters) method to access these buffers, as it would with an **IOCTL\_SPB\_FULL\_DUPLEX** request.
+To enable buffer capture, the driver must supply an [*EvtIoInCallerContext*](https://docs.microsoft.com/windows-hardware/drivers/ddi/wdfdevice/nc-wdfdevice-evt_wdf_io_in_caller_context) callback function when the driver registers its *EvtSpbControllerIoOther* function. The SPB controller driver must call the [**SpbRequestCaptureIoOtherTransferList**](about:blank) method to validate the request and capture these buffers in the process context of the request originator. The driver may then call the [**SpbRequestGetTransferParameters**](https://docs.microsoft.com/windows-hardware/drivers/ddi/spbcx/nf-spbcx-spbrequestgettransferparameters) method to access these buffers, as it would with an **IOCTL\_SPB\_FULL\_DUPLEX** request.
 
 The following code example shows an *EvtIoInCallerContext* function that is implemented by an SPI controller driver supporting both regular single-SPI (through **IOCTL\_SPB\_FULL\_DUPLEX**), and multi-SPI (through **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER**) requests, in order to capture the transfer lists for these SPI requests.
 
@@ -84,12 +84,7 @@ EvtIoInCallerContext(
     //
     // The IOCTL is recognized. Capture the buffers in the request.
     //
-
-    if (fxParams.Parameters.DeviceIoControl.IoControlCode == IOCTL_SPB_FULL_DUPLEX) {
-        status = SpbRequestCaptureIoOtherTransferList((SPBREQUEST)FxRequest);
-    } else if (fxParams.Parameters.DeviceIoControl.IoControlCode == IOCTL_SPB_MULTI_SPI_TRANSFER) {
-        status = SpbRequestCaptureMultiSpiTransfer((SPBREQUEST)FxRequest);
-    }
+    status = SpbRequestCaptureIoOtherTransferList((SPBREQUEST)FxRequest);
 
     //
     // If the capture fails, the driver must complete the request instead
@@ -117,28 +112,30 @@ exit:
 }
 ```
 
-In the preceding code example, the **switch** statement verifies that the request contains an IOCTL that the SPI SPB controller driver recognizes.  Next, the call to either the **SpbRequestCaptureIoOtherTransferList** or **SpbRequestCaptureMultiSpiTransfer** method captures the buffers in the transfer list of the request. If this call succeeds, the request is added to the SPB controller's I/O queue. Otherwise, the request is completed with an error status code.
+In the preceding code example, the **switch** statement verifies that the request contains an IOCTL that the SPI SPB controller driver recognizes.  Next, the call to either the **SpbRequestCaptureIoOtherTransferList** method captures the buffers in the transfer list of the request. If this call succeeds, the request is added to the SPB controller's I/O queue. Otherwise, the request is completed with an error status code.
 
-Typically, the SPB controller driver validates, and retrieves additional transfer parameter values of an **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** request in the *EvtSpbControllerIoOther* function instead of in the *EvtIoInCallerContext* function. The provided **SpbRequestCaptureMultiSpiTransfer** method validates the following:
+Typically, the SPB controller driver validates, and retrieves additional transfer parameter values of an **IOCTL\_SPB\_MULTI\_SPI\_TRANSFER** request in the *EvtSpbControllerIoOther* function instead of in the *EvtIoInCallerContext* function. The provided **SpbRequestCaptureIoOtherTransferList** method validates the following:
 -   The **SPB_MULTI_SPI_TRANSFER** input parameter structure is valid and the correct size.
 -   There are 1 or 2 transfer phases provided.
+-   The first entry in the transfer list is for a write buffer, and if present, the second is for a read buffer.
 -   The transfer mode is valid (dual or quad-SPI).
 -   The wait cycle count is zero for single-phase transfers.
+-   The **DelayInUs** value for both entries is zero.
 
 The following code example shows how a quad-SPI controller driver might implement the remainder of required checks. In this example, the driver verifies that the following parameter requirements are satisfied:
 -   The write phase buffer is sized correctly with respect to *WritePhaseSingleSpiByteCount* and *WaitCycleByteCount*
--   The first entry in the transfer list is for a write buffer, and the second is for a read buffer.
 -   The controller supports the requested transfer modes (in this example, controller only supports quad-SPI with a single opcode byte).
--   The **DelayInUs** value for both entries is zero.
 
 ```cpp
 //
-// Retrieve the SPB_MULTI_SPI_TRANSFER parameter structure.
+// Retrieve the SPB_MULTI_SPI_TRANSFER_HEADER parameter structure.
+// This structure should always be requested instead of the whole SPB_MULTI_SPI_TRANSFER,
+// as accessing the transfer list from the SPB_MULTI_SPI_TRANSFER is not safe in this undefined context.
 //
-PSPB_MULTI_SPI_TRANSFER transferParameters;
+PSPB_MULTI_SPI_TRANSFER_HEADER transferParameters;
 
 status = WdfRequestRetrieveInputBuffer(SpbRequest,
-                                       sizeof(SPB_MULTI_SPI_TRANSFER),
+                                       sizeof(SPB_MULTI_SPI_TRANSFER_HEADER),
                                        (PVOID*) &transferParameters,
                                        NULL);
 
@@ -148,18 +145,18 @@ status = WdfRequestRetrieveInputBuffer(SpbRequest,
 // single-SPI byte for an opcode.
 //
 if (transferParameters->Mode != SpbMultiSpiTransferModeQuadSpi) {
-    status = STATUS_NOT_SUPPORTED;        
+    status = STATUS_NOT_SUPPORTED;
     goto exit;
 }
 
 if (transferParameters->WritePhaseSingleSpiByteCount != 1) {
-    status = STATUS_NOT_SUPPORTED;        
+    status = STATUS_NOT_SUPPORTED;
     goto exit;
 }
 
 //
 // Validate the transfer count.
-// SpbRequestCaptureMultiSpiTransfer has already validated we have either 1 or 2 phases.
+// SpbRequestCaptureIoOtherTransferList has already validated we have either 1 or 2 phases.
 //
 SPB_REQUEST_PARAMETERS params;
 SPB_REQUEST_PARAMETERS_INIT(&params);
@@ -204,37 +201,14 @@ if (hasReadPhase) {
 // and the single-SPI bytes (in this case, opcode byte).
 // Here, we allow for case where wait cycles immediately follow the opcode.
 //
-if (writeDescriptor.TransferLength < transferParameters->WritePhaseSingleSpiByteCount + transferParameters->WaitCycleByteCount) {
-    status = STATUS_INVALID_PARAMETER;
+ULONG requiredWritePhaseSize = 0;
+
+status = RtlULongAdd(transferParameters->WritePhaseSingleSpiByteCount, transferParameters->WaitCycleByteCount, &requiredWritePhaseSize);
+if (!NT_SUCCESS(status)) {
     goto exit;
 }
 
-//
-// Validate the transfer direction of each descriptor.
-//
-
-if ((writeDescriptor.Direction != SpbTransferDirectionToDevice) ||
-    (hasReadPhase && (readDescriptor.Direction != SpbTransferDirectionFromDevice)))
-{
-    //
-    // For multi-SPI I/O, the direction of the first transfer
-    // must be SpbTransferDirectionToDevice, and the direction
-    // of the second, if provided, must be SpbTransferDirectionFromDevice.
-    //
-    status = STATUS_INVALID_PARAMETER;
-    goto exit;
-}
-
-//
-// Validate the delay for each transfer descriptor.
-//
-
-if ((writeDescriptor.DelayInUs != 0) || (hasReadPhase && (readDescriptor.DelayInUs != 0)))
-{
-    //
-    // Delay for multi-SPI transfers is provided in the form of wait cycle bytes.
-    //
-    
+if (writeDescriptor.TransferLength < requiredWritePhaseSize) {
     status = STATUS_INVALID_PARAMETER;
     goto exit;
 }
