@@ -22,6 +22,8 @@
       href: using-the-spb-transfer-list-structure.md
     - name: "Handling IOCTL_SPB_FULL_DUPLEX Requests"
       href: handling-ioctl-spb-full-duplex-requests.md
+    - name: "Handling IOCTL_SPB_MULTI_SPI_TRANSFER Transfer Requests"
+      href: handling-multi-spi-requests.md
     - name: "How to Get the Connection Settings for a Device"
       href: how-to-get-the-connection-settings-for-a-device.md
     - name: "SpbCx Object Handles"
@@ -45,6 +47,8 @@
       href: hardware-resources-for-user-mode-spb-peripheral-drivers.md
     - name: "Full-Duplex I/O Requests"
       href: full-duplex-i-o-requests.md
+    - name: "Multi-SPI I/O Requests"
+      href: multi-spi-i-o-requests.md
     - name: "Atomic Bus Operations"
       href: atomic-bus-operations.md
     - name: "SPB Connection Locks"
